@@ -1,0 +1,12 @@
+# credenciais reais - nunca commitar
+.streamlit/secrets.toml
+empresas.json
+
+# dados de pacientes (CSVs de origem e estado de sincronização)
+uploads/
+*.sync.json
+*.csv
+
+__pycache__/
+*.pyc
+.DS_Store
