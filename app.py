@@ -4,6 +4,7 @@ com a Clinica nas Nuvens.
 
 Rodar com: streamlit run app.py
 """
+import hashlib
 import os
 
 import pandas as pd
@@ -25,6 +26,7 @@ st.set_page_config(page_title="Integração Agendamentos · Clínica nas Nuvens"
 def init_state():
     defaults = {
         "csv_path": None,
+        "uploaded_hash": None,
         "registros_full": [],
         "status_filtro": None,
         "sync_running": False,
@@ -40,12 +42,11 @@ def init_state():
 
 
 def carregar_para_sessao(csv_path: str):
-    if st.session_state.csv_path != csv_path:
-        st.session_state.csv_path = csv_path
-        st.session_state.registros_full = carregar_registros(csv_path)
-        st.session_state.sync_running = False
-        st.session_state.status_filtro = None
-        st.session_state.sync_log = []
+    st.session_state.csv_path = csv_path
+    st.session_state.registros_full = carregar_registros(csv_path)
+    st.session_state.sync_running = False
+    st.session_state.status_filtro = None
+    st.session_state.sync_log = []
 
 
 def persistir():
@@ -158,11 +159,17 @@ with tab_empresas:
 with tab_agendamentos:
     uploaded = st.file_uploader("Envie o relatório de agendamentos (CSV)", type=["csv"])
     if uploaded is not None:
-        dest_path = os.path.join(UPLOAD_DIR, uploaded.name)
-        if not os.path.exists(dest_path) or st.session_state.csv_path != dest_path:
+        conteudo = uploaded.getbuffer()
+        hash_atual = hashlib.md5(conteudo).hexdigest()
+        # o widget mantém o mesmo arquivo "selecionado" em toda a sessão (inclusive durante
+        # os reruns da sincronização) - só reprocessa quando o conteúdo realmente muda,
+        # o que também cobre reenviar um arquivo com o mesmo nome mas dados atualizados.
+        if hash_atual != st.session_state.uploaded_hash:
+            dest_path = os.path.join(UPLOAD_DIR, uploaded.name)
             with open(dest_path, "wb") as f:
-                f.write(uploaded.getbuffer())
-        carregar_para_sessao(dest_path)
+                f.write(conteudo)
+            st.session_state.uploaded_hash = hash_atual
+            carregar_para_sessao(dest_path)
 
     csv_path = st.session_state.csv_path
     if not csv_path:

@@ -1,17 +1,30 @@
 """Logica de sincronizacao compartilhada entre o CLI (Main.py) e a interface web (app.py)."""
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta
 
-from parser import parse_csv
+from parser import parse_csv, PARSER_VERSION
 from config import Empresa
 from clinica_nuvens import ClinicaNuvensClient, ClinicaNuvensAPIError
 
 STATUS_LABELS = {"pendente": "Pendentes", "sincronizado": "Sincronizados", "erro": "Com erro"}
 
 
+def _hash_conteudo(csv_path: str) -> str:
+    """Inclui a versão do parser no hash: uma correção no parsing (ex: suporte a um novo
+    formato de coluna) invalida automaticamente qualquer estado antigo gerado com bug,
+    em vez de reaproveitar por engano um resultado (ex: lista vazia) de antes da correção."""
+    with open(csv_path, "rb") as f:
+        conteudo = f.read()
+    return hashlib.md5(conteudo + f"|v{PARSER_VERSION}".encode()).hexdigest()[:12]
+
+
 def caminho_estado(csv_path: str) -> str:
-    return f"{csv_path}.sync.json"
+    """O estado é vinculado ao conteúdo do arquivo, não só ao nome — assim, reenviar um CSV
+    com o mesmo nome mas dados diferentes (ex: relatório reexportado) é tratado como novo,
+    em vez de reaproveitar por engano o progresso de sincronização de um arquivo antigo."""
+    return f"{csv_path}.{_hash_conteudo(csv_path)}.sync.json"
 
 
 def carregar_registros(csv_path: str) -> list[dict]:
