@@ -10,7 +10,9 @@ import os
 import pandas as pd
 import streamlit as st
 
-from config import Empresa, carregar_empresas, adicionar_empresa, remover_empresa
+import re
+
+from config import Empresa, carregar_empresas, adicionar_empresa, remover_empresa, eh_fixa
 from clinica_nuvens import ClinicaNuvensClient, ClinicaNuvensAPIError
 from sync_service import (
     carregar_registros, salvar_registros, contar_status, sincronizar_registro,
@@ -99,7 +101,9 @@ with tab_empresas:
     if not empresas:
         st.info("Nenhuma empresa cadastrada ainda.")
     for e in empresas:
-        with st.expander(f"{e.nome}  ·  cid={e.cid}"):
+        fixa = eh_fixa(e.nome)
+        rotulo = "🔒 fixa" if fixa else "⚠️ local (não persiste)"
+        with st.expander(f"{e.nome}  ·  cid={e.cid}  ·  {rotulo}"):
             col1, col2 = st.columns(2)
             with col1:
                 st.write(f"**ID local agenda:** {e.id_local_agenda}")
@@ -118,9 +122,19 @@ with tab_empresas:
                     st.success("Conexão OK.")
                 except ClinicaNuvensAPIError as err:
                     st.error(f"Falha na conexão: {err}")
-            if btn_col2.button("🗑️ Remover", key=f"del_{e.nome}"):
-                remover_empresa(e.nome)
-                st.rerun()
+            if fixa:
+                btn_col2.caption("Empresa fixa: para alterar/remover, edite os Secrets do app.")
+            else:
+                if btn_col2.button("🗑️ Remover", key=f"del_{e.nome}"):
+                    remover_empresa(e.nome)
+                    st.rerun()
+                st.caption(
+                    "Esta empresa está salva só neste servidor e some se ele reiniciar ou em outro "
+                    "computador. Para torná-la fixa, cole o bloco abaixo nos Secrets do app "
+                    "(Streamlit Cloud → Settings → Secrets, ou .streamlit/secrets.toml local) e salve."
+                )
+                chave = re.sub(r"[^a-z0-9_]+", "_", e.nome.lower()).strip("_") or "empresa"
+                st.code(e.to_toml(chave), language="toml")
 
     st.divider()
     st.subheader("Nova empresa")
@@ -145,6 +159,8 @@ with tab_empresas:
         if submitted:
             if not nome or not client_id or not client_secret or not cid:
                 st.error("Preencha nome, client_id, client_secret e o token da clínica.")
+            elif eh_fixa(nome):
+                st.error(f"'{nome}' já é uma empresa fixa (Secrets). Use outro nome ou edite os Secrets.")
             else:
                 adicionar_empresa(Empresa(
                     nome=nome, client_id=client_id, client_secret=client_secret, cid=cid,
