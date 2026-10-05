@@ -6,13 +6,16 @@ Rodar com: streamlit run app.py
 """
 import hashlib
 import os
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
 
 import re
 
-from config import Empresa, carregar_empresas, adicionar_empresa, remover_empresa, eh_fixa
+from config import (
+    Empresa, carregar_empresas, adicionar_empresa, atualizar_empresa, remover_empresa, eh_fixa,
+)
 from clinica_nuvens import ClinicaNuvensClient, ClinicaNuvensAPIError
 from sync_service import (
     carregar_registros, salvar_registros, contar_status, sincronizar_registro,
@@ -82,6 +85,49 @@ def exigir_login():
     st.stop()
 
 
+def chave_toml(nome: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", nome.lower()).strip("_") or "empresa"
+
+
+def form_empresa(form_key: str, base: Optional[Empresa] = None, botao: str = "Salvar empresa") -> Optional[Empresa]:
+    """Campos de cadastro/edicao. Retorna a Empresa preenchida quando o form e enviado e valido.
+    Na edicao, client_secret em branco mantem o atual."""
+    b = base or Empresa(nome="", client_id="", client_secret="", cid="",
+                        id_local_agenda=0, id_tipo_consulta=0, id_tipo_convenio=0)
+    with st.form(form_key, clear_on_submit=base is None):
+        nome = st.text_input("Nome da empresa", value=b.nome)
+        col1, col2 = st.columns(2)
+        client_id = col1.text_input("client_id", value=b.client_id)
+        client_secret = col2.text_input(
+            "client_secret", type="password",
+            placeholder="deixe em branco para manter o atual" if base else "",
+        )
+        cid = st.text_input("Token da clínica (clinicaNasNuvens-cid)", value=b.cid)
+
+        col3, col4, col5 = st.columns(3)
+        id_local_agenda = col3.number_input("ID local da agenda", value=b.id_local_agenda, step=1, min_value=0)
+        id_tipo_consulta = col4.number_input("ID tipo de consulta", value=b.id_tipo_consulta, step=1, min_value=0)
+        id_tipo_convenio = col5.number_input("ID tipo de convênio padrão", value=b.id_tipo_convenio, step=1, min_value=0)
+
+        col6, col7, col8 = st.columns(3)
+        duracao = col6.number_input("Duração padrão (min)", value=b.duracao_padrao_minutos, step=5, min_value=5)
+        data_nasc_padrao = col7.text_input("Data nasc. padrão (yyyy-MM-dd)", value=b.data_nascimento_padrao)
+        status_agendamento = col8.text_input("Status do agendamento", value=b.status_agendamento)
+
+        if not st.form_submit_button(botao):
+            return None
+    client_secret = client_secret or (base.client_secret if base else "")
+    if not nome or not client_id or not client_secret or not cid:
+        st.error("Preencha nome, client_id, client_secret e o token da clínica.")
+        return None
+    return Empresa(
+        nome=nome.strip(), client_id=client_id.strip(), client_secret=client_secret.strip(), cid=cid.strip(),
+        id_local_agenda=int(id_local_agenda), id_tipo_consulta=int(id_tipo_consulta),
+        id_tipo_convenio=int(id_tipo_convenio), duracao_padrao_minutos=int(duracao),
+        data_nascimento_padrao=data_nasc_padrao.strip(), status_agendamento=status_agendamento.strip(),
+    )
+
+
 init_state()
 exigir_login()
 
@@ -123,53 +169,50 @@ with tab_empresas:
                 except ClinicaNuvensAPIError as err:
                     st.error(f"Falha na conexão: {err}")
             if fixa:
-                btn_col2.caption("Empresa fixa: para alterar/remover, edite os Secrets do app.")
+                btn_col2.caption("Empresa fixa: para remover, apague o bloco dela nos Secrets do app.")
             else:
                 if btn_col2.button("🗑️ Remover", key=f"del_{e.nome}"):
                     remover_empresa(e.nome)
                     st.rerun()
+
+            with st.popover("✏️ Editar", use_container_width=True):
+                if fixa:
+                    st.caption(
+                        "Empresa fixa (Secrets): ao salvar, o app gera o bloco atualizado. "
+                        "Substitua o bloco antigo dela nos Secrets e salve lá."
+                    )
+                editada = form_empresa(f"edit_{e.nome}", base=e, botao="Salvar alterações")
+                if editada:
+                    if editada.nome != e.nome and editada.nome in {x.nome for x in empresas}:
+                        st.error(f"Já existe uma empresa chamada '{editada.nome}'.")
+                    elif fixa:
+                        st.session_state[f"toml_{e.nome}"] = editada.to_toml(chave_toml(editada.nome))
+                    else:
+                        atualizar_empresa(e.nome, editada)
+                        st.success(f"Empresa '{editada.nome}' atualizada.")
+                        st.rerun()
+
+            if fixa and st.session_state.get(f"toml_{e.nome}"):
+                st.caption("Bloco atualizado - cole nos Secrets no lugar do bloco antigo desta empresa:")
+                st.code(st.session_state[f"toml_{e.nome}"], language="toml")
+            elif not fixa:
                 st.caption(
                     "Esta empresa está salva só neste servidor e some se ele reiniciar ou em outro "
                     "computador. Para torná-la fixa, cole o bloco abaixo nos Secrets do app "
                     "(Streamlit Cloud → Settings → Secrets, ou .streamlit/secrets.toml local) e salve."
                 )
-                chave = re.sub(r"[^a-z0-9_]+", "_", e.nome.lower()).strip("_") or "empresa"
-                st.code(e.to_toml(chave), language="toml")
+                st.code(e.to_toml(chave_toml(e.nome)), language="toml")
 
     st.divider()
     st.subheader("Nova empresa")
-    with st.form("nova_empresa", clear_on_submit=True):
-        nome = st.text_input("Nome da empresa")
-        col1, col2 = st.columns(2)
-        client_id = col1.text_input("client_id")
-        client_secret = col2.text_input("client_secret", type="password")
-        cid = st.text_input("Token da clínica (clinicaNasNuvens-cid)")
-
-        col3, col4, col5 = st.columns(3)
-        id_local_agenda = col3.number_input("ID local da agenda", step=1, min_value=0)
-        id_tipo_consulta = col4.number_input("ID tipo de consulta", step=1, min_value=0)
-        id_tipo_convenio = col5.number_input("ID tipo de convênio padrão", step=1, min_value=0)
-
-        col6, col7, col8 = st.columns(3)
-        duracao = col6.number_input("Duração padrão (min)", value=30, step=5, min_value=5)
-        data_nasc_padrao = col7.text_input("Data nasc. padrão (yyyy-MM-dd)", value="2000-01-01")
-        status_agendamento = col8.text_input("Status do agendamento", value="AGENDADO")
-
-        submitted = st.form_submit_button("Salvar empresa")
-        if submitted:
-            if not nome or not client_id or not client_secret or not cid:
-                st.error("Preencha nome, client_id, client_secret e o token da clínica.")
-            elif eh_fixa(nome):
-                st.error(f"'{nome}' já é uma empresa fixa (Secrets). Use outro nome ou edite os Secrets.")
-            else:
-                adicionar_empresa(Empresa(
-                    nome=nome, client_id=client_id, client_secret=client_secret, cid=cid,
-                    id_local_agenda=int(id_local_agenda), id_tipo_consulta=int(id_tipo_consulta),
-                    id_tipo_convenio=int(id_tipo_convenio), duracao_padrao_minutos=int(duracao),
-                    data_nascimento_padrao=data_nasc_padrao, status_agendamento=status_agendamento,
-                ))
-                st.success(f"Empresa '{nome}' salva.")
-                st.rerun()
+    nova = form_empresa("nova_empresa")
+    if nova:
+        if nova.nome in {x.nome for x in empresas}:
+            st.error(f"Já existe uma empresa chamada '{nova.nome}'. Use o botão ✏️ Editar dela.")
+        else:
+            adicionar_empresa(nova)
+            st.success(f"Empresa '{nova.nome}' salva.")
+            st.rerun()
 
 # ========================================================= ABA AGENDAMENTOS
 with tab_agendamentos:

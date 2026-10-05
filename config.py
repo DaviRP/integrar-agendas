@@ -84,6 +84,12 @@ def adicionar_empresa(empresa: Empresa) -> None:
     salvar_empresas(empresas)
 
 
+def atualizar_empresa(nome_antigo: str, empresa: Empresa) -> None:
+    """Substitui a empresa local mantendo a posicao na lista (permite renomear)."""
+    empresas = [empresa if e.nome == nome_antigo else e for e in carregar_empresas_locais()]
+    salvar_empresas(empresas)
+
+
 def remover_empresa(nome: str) -> None:
     empresas = [e for e in carregar_empresas_locais() if e.nome != nome]
     salvar_empresas(empresas)
